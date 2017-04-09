@@ -46,7 +46,6 @@ import encodings
 
 import imp, sys, os
 import zipimport
-from openerp.tools.config import config
 from lxml import etree
 
 import logging

@@ -35,11 +35,11 @@
 
 import os, sys, traceback
 from tempfile import NamedTemporaryFile
-import openerp.report as report
-from openerp.report.report_sxw import report_sxw, report_rml#, browse_record_list
+import odoo.report as report
+from odoo import models, _, api, exceptions
+from odoo.report.report_sxw import report_sxw, report_rml#, browse_record_list
 from pyPdf import PdfFileWriter, PdfFileReader
 
-from openerp.osv.orm import browse_record_list #TODO v8?
 from docs_client_lib import DOCSConnection
 try:
     from cStringIO import StringIO
@@ -48,23 +48,21 @@ except ImportError:
 
 from xml.dom import minidom
 import base64
-from openerp import models, registry
-from openerp.osv import osv
-from openerp.tools.translate import _
-import openerp.tools as tools
+from odoo import models, fields, _, exceptions
+from odoo import modules
+import odoo.tools as tools
 import time
 import copy
 import threading
 from random import randint
-from openerp.modules import load_information_from_description_file
-import openerp.release as release
+from odoo.modules import load_information_from_description_file
+import odoo.release as release
 
 from aeroolib import __version__ as aeroolib_version
 from aeroolib.plugins.opendocument import Template, OOSerializer
 from genshi.template import NewTextTemplate
 from genshi.template.eval import StrictLookup
 from genshi import __version__ as genshi_version
-import openerp.pooler as pooler #TODO remove v8
 from lxml import etree
 import logging
 
@@ -153,20 +151,28 @@ class Aeroo_report(report_sxw):
     def logger(self, message, level=logging.DEBUG):
         logger.log(level, message, exc_info=1)
 
-    def __init__(self, cr, name, table, rml=False, parser=False, header=True, store=False):
+    def __init__(self, name, table, rml=False, parser=False, header=True, store=False):
         super(Aeroo_report, self).__init__(name, table, rml, parser, header, store)
         self.logger("registering %s (%s)" % (name, table), logging.INFO)
         self.active_prints = {}
+
+        registry = modules.registry.RegistryManager.get(db)
+
+        cr = registry.cursor()
+
+        with api.Environment.manage():
+            env = api.Environment(cr, 1, {})
+
+        self.env = env
 
         pool = registry(cr.dbname)
         ir_obj = pool.get('ir.actions.report.xml')
         name = name.startswith('report.') and name[7:] or name
         try:
-            report_xml_ids = ir_obj.search(cr, 1, [('report_name', '=', name)])
-            if report_xml_ids:
-                report_xml = ir_obj.browse(cr, 1, report_xml_ids[0])
-            else:
-                report_xml = False
+            env['res.font'].sudo().font_scan(lazy=True)
+            ir_obj = env['ir.actions.report.xml']
+
+            report_xml = ir_obj.search([('report_name', '=', self.name[7:])], limit=1)
             #TODO v8 remove, preload_mode is deprecated, as reports themselves are not preloaded
             #if report_xml and report_xml.preload_mode == 'preload':
             #    file_data = report_xml.report_sxw_content
@@ -185,9 +191,9 @@ class Aeroo_report(report_sxw):
 
     def getObjects_mod(self, cr, uid, ids, rep_type, context):
         if rep_type=='aeroo':
-            table_obj = registry(cr.dbname).get(self.table)
-            return table_obj and table_obj.browse(cr, uid, ids, context=context) or []
-        return super(Aeroo_report, self).getObjects(cr, uid, ids, context)
+            table_obj = self.env.get(self.table)
+            return table_obj and table_obj.browse(ids) or []
+        return super(Aeroo_report, self).getObjects(cr, uid, ids, self.env.context)
 
     ##### Counter functions #####
     def _def_inc(self, aeroo_print):
@@ -284,7 +290,7 @@ class Aeroo_report(report_sxw):
         return include_document
 
     def _subreport(self, cr, uid, aeroo_print, output='odt', aeroo_docs=False, context={}):
-        pool = registry(cr.dbname)
+        pool = self.env
         ir_obj = pool.get('ir.actions.report.xml')
         #### for odt documents ####
         def odt_subreport(name=None, obj=None):
@@ -318,7 +324,7 @@ class Aeroo_report(report_sxw):
             return None
         #### for text documents ####
         def raw_subreport(name=None, obj=None):
-            report_xml_ids = ir_obj.search(cr, uid, [('report_name', '=', name)], context=context)
+            report_xml_ids = ir_obj.search([('report_name', '=', name)])
             if report_xml_ids:
                 report_xml = ir_obj.browse(cr, uid, report_xml_ids[0], context=context)
                 data = {'model': obj._table_name, 'id': obj.id, 'report_type': 'aeroo', 'in_format': 'genshi-raw'}
@@ -345,7 +351,7 @@ class Aeroo_report(report_sxw):
 
     def get_other_template(self, cr, uid, model, rec_id, parser):
         if hasattr(parser, 'get_template'):
-            pool = registry(cr.dbname)
+            pool = self.env
             record = pool.get(model).browse(cr, uid, rec_id, {})
             template = parser.get_template(cr, uid, record)
             return template
@@ -353,7 +359,7 @@ class Aeroo_report(report_sxw):
             return False
 
     def get_styles_file(self, cr, uid, report_xml, company=None, context=None):
-        pool = registry(cr.dbname)
+        pool = self.env
         style_io=None
         if report_xml.styles_mode!='default':
             if report_xml.styles_mode=='global':
@@ -461,7 +467,7 @@ class Aeroo_report(report_sxw):
         raise Exception(_("Aeroo Reports: Error while generating the report."), e, str(e), _("For more reference inspect error logs."))
 
     def get_docs_conn(self, cr):
-        pool = registry(cr.dbname)
+        pool = self.env
         icp = pool.get('ir.config_parameter')
         docs_host = icp.get_param(cr, 1, 'aeroo.docs_host') or 'localhost'
         docs_port = icp.get_param(cr, 1, 'aeroo.docs_port') or '8989'
@@ -477,7 +483,7 @@ class Aeroo_report(report_sxw):
         deferred = context.get('deferred_process')
         if deferred:
             deferred.set_status(_('Started'))
-        pool = registry(cr.dbname)
+        pool = self.env
         if not context:
             context={}
         context = context.copy()
@@ -513,7 +519,7 @@ class Aeroo_report(report_sxw):
 
         if report_xml.tml_source in ('file', 'database'):
             if not report_xml.report_sxw_content or report_xml.report_sxw_content=='False':
-                raise osv.except_osv(_('Error!'), _('No template found!'))
+                raise exceptions.UserError(_('No template found!'))
             file_data = base64.decodestring(report_xml.report_sxw_content)
         else:
             model = context.get('active_model', data.get('model')) or data.get('model')
@@ -645,7 +651,7 @@ class Aeroo_report(report_sxw):
     def _create_source(self, cr, uid, ids, data, report_xml, context=None):
         results = []
         context = context or {}
-        pool = registry(cr.dbname)
+        pool = self.env
         attach = report_xml.attachment
         aeroo_docs = self.aeroo_docs_enabled(cr) # Detect DOCS conn. enabled
         context['aeroo_docs'] = aeroo_docs
@@ -727,7 +733,7 @@ class Aeroo_report(report_sxw):
                 deferred.set_status(_('Concatenating single documents'))
             not_pdf = filter(lambda r: r[1]!='pdf', results)
             if not_pdf:
-                raise osv.except_osv(_('Error!'), _('Unsupported combination of formats!'))
+                raise exceptions.UserError(_('Unsupported combination of formats!'))
             #if results[0][1]=='pdf':
             output = PdfFileWriter()
             for r in results:
@@ -774,19 +780,18 @@ class Aeroo_report(report_sxw):
         context['print_id'] = aeroo_print.id
         ###############################
         self.logger("Start process %s (%s)" % (self.name, self.table), logging.INFO) # debug mode
-        pool = registry(cr.dbname)
+        pool = self.env
         if context is None:
             context = {}
         if 'tz' not in context:
-            context['tz'] = pool.get('res.users').browse(cr, uid, uid).tz
+            context['tz'] = pool.get('res.users').browse(uid).tz
 
         data.setdefault('model', context.get('active_model',False))
         ir_obj = pool.get('ir.actions.report.xml')
         name = self.name.startswith('report.') and self.name[7:] or self.name
-        report_xml_ids = ir_obj.search(cr, uid,
-                [('report_name', '=', name)], context=context)
+        report_xml_ids = ir_obj.search([('report_name', '=', name)])
         if report_xml_ids:
-            report_xml = ir_obj.browse(cr, uid, report_xml_ids[0], context=context)
+            report_xml = ir_obj.browse(report_xml_ids[0])
             #TODO v8
             #report_xml.report_rml = None
             #report_xml.report_rml_content = None

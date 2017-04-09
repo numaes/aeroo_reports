@@ -29,8 +29,7 @@
 #
 ##############################################################################
 
-from openerp import models, fields, api, _
-from openerp.exceptions import Warning
+from odoo import models, fields, api, _, exceptions
 import re
 
 class report_print_by_action(models.TransientModel):

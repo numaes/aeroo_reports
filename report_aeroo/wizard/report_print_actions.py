@@ -29,10 +29,8 @@
 #
 ##############################################################################
 
-from openerp import api, models, fields, _
-from openerp.exceptions import except_orm, Warning
+from odoo import api, models, fields, _, exceptions
 
-from openerp.report import interface
 import re
 
 class report_print_actions(models.TransientModel):
@@ -54,22 +52,23 @@ class report_print_actions(models.TransientModel):
             return True
         return False
 
-    def start_deferred(self, cr, uid, ids, context=None):
-        this = self.browse(cr, uid, ids[0], context=context)
-        report_xml = self.pool.get('ir.actions.report.xml').browse(cr, uid, context['report_action_id'])
-        deferred_proc_obj = self.pool.get('deferred_processing.task')
-        process_id = deferred_proc_obj.create(cr, uid, {'name':report_xml.name}, context=context)
-        deferred_proc_obj.new_process(cr, uid, process_id, context=context)
-        deferred_proc_obj.start_process_report(cr, uid, process_id, this.print_ids, context['report_action_id'], context=context)
+    def start_deferred(self):
+        self.ensure_one()
+        this = self
+        report_xml = self.env.get('ir.actions.report.xml').browse(self.env.context['report_action_id'])
+        deferred_proc_obj = self.env.get('deferred_processing.task')
+        process = deferred_proc_obj.create({'name':report_xml.name})
+        process.new_process()
+        process.start_process_report(this.print_ids, self.env.context['report_action_id'])
 
-        mod_obj = self.pool.get('ir.model.data')
-        act_obj = self.pool.get('ir.actions.act_window')
+        mod_obj = self.env.get('ir.model.data')
+        act_obj = self.env.get('ir.actions.act_window')
 
-        mod_id = mod_obj.search(cr, uid, [('name', '=', 'action_deferred_processing_task_deferred_processing')])[0]
-        res_id = mod_obj.read(cr, uid, mod_id, ['res_id'])['res_id']
-        act_win = act_obj.read(cr, uid, res_id, ['name','type','view_id','res_model','view_type',
-                                                'search_view_id','view_mode','target','context'])
-        act_win['res_id'] = process_id
+        mod = mod_obj.search([('name', '=', 'action_deferred_processing_task_deferred_processing')])[0]
+        res_id = mod_obj.read(mod.id, ['res_id'])['res_id']
+        act_win = act_obj.read(res_id, ['name','type','view_id','res_model','view_type',
+                                        'search_view_id','view_mode','target','context'])
+        act_win['res_id'] = process.id
         act_win['view_type'] = 'form'
         act_win['view_mode'] = 'form,tree'
         return act_win
@@ -79,15 +78,15 @@ class report_print_actions(models.TransientModel):
         report_xml = recs._get_report()
         data = {
                 'model':report_xml.model, 
-                'ids':this.print_ids,
-                'id':context['active_id'],
+                'ids':recs.print_ids,
+                'id':recs.env.context['active_id'],
                 'report_type': 'aeroo'
                 }
         return {
                 'type': 'ir.actions.report.xml',
                 'report_name': report_xml.report_name,
                 'datas': data,
-                'context': context
+                'context': recs.env.context
                 }
     
     @api.multi
@@ -119,7 +118,7 @@ class report_print_actions(models.TransientModel):
                     process?"),
                 'print_ids': str(print_ids)
                 })
-            return self._reopen(recs.id, recs._model)
+            return recs._reopen(recs.id, recs._model)
         ##### Simple print #####
         data = {
                 'model': report_xml.model,
@@ -154,7 +153,7 @@ class report_print_actions(models.TransientModel):
     copies = fields.Integer(string='Number of copies', required=True)
     message = fields.Text('Message')
     state = fields.Selection([('draft','Draft'),('confirm','Confirm'),
-        ('done','Done'),],'State', select=True, readonly=True)
+        ('done','Done'),],'State', select=True, readonly=True, default='draft')
     print_ids = fields.Text()
     report_id = fields.Many2one('ir.actions.report.xml', 'Report')
     
@@ -190,8 +189,3 @@ class report_print_actions(models.TransientModel):
         if 'report_id' in allfields:
             res['report_id'] = report_xml.id
         return res
-    
-    _defaults = {
-        'state': 'draft',
-    }
-

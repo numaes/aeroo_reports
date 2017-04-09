@@ -30,8 +30,7 @@
 #
 ################################################################################
 
-from openerp.osv import osv
-from openerp.tools.translate import _
+from odoo import exceptions, _
 
 __all__ = [
     'check_deps',
@@ -47,5 +46,5 @@ def check_deps(check_list):
             error = True
             import_errors.append(str(e))
     if error:
-        raise osv.except_osv(_('Warning!')+' '+_('Unmet python dependencies!'), '\n'.join(import_errors))
+        raise exceptions.Warning(_('Unmet python dependencies!\n%s') % '\n'.join(import_errors))
 

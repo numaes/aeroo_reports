@@ -29,9 +29,9 @@
 #
 ##############################################################################
 
-from openerp.osv import osv, fields
-from openerp.tools import convert_xml_import
-from openerp.tools.translate import _
+from odoo import models, fields, exceptions
+from odoo.tools import convert_xml_import
+from odoo.tools.translate import _
 import base64
 import lxml.etree
 import zipfile
@@ -40,73 +40,70 @@ try:
 except ImportError:
     from StringIO import StringIO
 
-class report_aeroo_import(osv.osv_memory):
+class report_aeroo_import(models.TransientModel):
     _name = 'aeroo.report_import'
     _description = 'Aeroo report import wizard'
     
-    _columns = {
-        'name':fields.char('Name', size=64),
-        'file':fields.binary('Aeroo report file', filters='*.aeroo', required=True),
-        'info': fields.text('Info', readonly=True),
-        'state':fields.selection([
+    name = fields.Char('Name')
+    file = fields.Binary('Aeroo report file', filters='*.aeroo', required=True)
+    info = fields.Text('Info', readonly=True)
+    state = fields.Selection([
             ('draft','Draft'),
             ('info','Info'),
             ('done','Done'),
-            
-        ],'State', select=True, readonly=True),
-                        
-    }
+        ],'State', select=True, readonly=True, default='draft')
 
-    def default_get(self, cr, uid, fields_list, context=None):
+    def default_get(self, fields_list):
         values = {'state': 'draft'}
-        default_ids = context.get('default_ids')
+        default_ids = self.env.context.get('default_ids')
         if default_ids:
-            this = self.read(cr, uid, default_ids, ['name','state','file','info'], context=context)[0]
+            this = self.read(default_ids, ['name','state','file','info'])[0]
             del this['id']
             values.update(this)
         return values
 
-    def install_report(self, cr, uid, ids, context=None):
-        report_obj = self.pool.get('ir.actions.report.xml')
-        this = self.browse(cr, uid, ids[0], context=context)
-        if report_obj.search(cr, uid, [('report_name','=',this.name)], context=context):
-            raise osv.except_osv(_('Warning!'), _('Report with service name "%s" already exist in system!') % this.name)
+    def install_report(self):
+        self.ensure_one()
+        report_obj = self.env.get('ir.actions.report.xml')
+        this = self
+        if report_obj.search([('report_name','=',this.name)]):
+            raise exceptions.UserError(_('Report with service name "%s" already exist in system!') % this.name)
         fd = StringIO()
         fd.write(base64.decodestring(this.file))
         fd.seek(0)
         convert_xml_import(cr, 'report_aeroo', fd, {}, 'init', noupdate=True)
         fd.close()
-        self.write(cr, uid, ids, {'state':'done'}, context=context)
-        report_id = report_obj.search(cr, uid, [('report_name','=',this.name)], context=context)[-1]
-        report = report_obj.browse(cr, uid, report_id, context=context)
-        event_id = self.pool.get('ir.values').set_action(cr, uid, report.report_name, 'client_print_multi', report.model, 'ir.actions.report.xml,%d' % report_id)
+        this.state = 'done'
+        report = report_obj.search([('report_name','=',this.name)])[-1]
+        event_id = self.env.get('ir.values').set_action(report.report_name, 'client_print_multi', report.model, 'ir.actions.report.xml,%d' % report.id)
         if report.report_wizard:
             report._set_report_wizard(report.id)
 
-        mod_obj = self.pool.get('ir.model.data')
-        act_obj = self.pool.get('ir.actions.act_window')
+        mod_obj = self.env.get('ir.model.data')
+        act_obj = self.env.get('ir.actions.act_window')
 
-        mod_id = mod_obj.search(cr, uid, [('name', '=', 'action_aeroo_report_xml_tree')])[0]
-        res_id = mod_obj.read(cr, uid, mod_id, ['res_id'])['res_id']
-        act_win = act_obj.read(cr, uid, res_id, [])
-        act_win['domain'] = [('id','=',report_id)]
+        mod = mod_obj.search([('name', '=', 'action_aeroo_report_xml_tree')])[0]
+        res_id = mod_obj.read(mod.id, ['res_id'])['res_id']
+        act_win = act_obj.read(res_id, [])
+        act_win['domain'] = [('id','=',report.id)]
         return act_win
 
-    def next(self, cr, uid, ids, context=None):
-        this = self.browse(cr, uid, ids[0], context=context)
+    def next(self):
+        self.ensure_one()
+        this = self
         file_data = base64.decodestring(this.file)
         zip_stream = StringIO()
         zip_stream.write(file_data)
         zip_obj = zipfile.ZipFile(zip_stream, mode='r', compression=zipfile.ZIP_DEFLATED)
         if zipfile.is_zipfile(zip_stream):
-            report_obj = self.pool.get('ir.actions.report.xml')
-            context['allformats'] = True
+            report_obj = self.env.get('ir.actions.report.xml')
+            self.env.context['allformats'] = True
             mimetypes = dict(report_obj._get_in_mimetypes(cr, uid, context=context))
             styles_select = dict(report_obj._columns['styles_mode'].selection)
             if 'data.xml' in zip_obj.namelist():
                 data = zip_obj.read('data.xml')
             else:
-                raise osv.except_osv(_('Error!'), _('Aeroo report file is invalid!'))
+                raise exceptions.UserError(_('Aeroo report file is invalid!'))
             tree = lxml.etree.parse(StringIO(data))
             root = tree.getroot()
             info = ''
@@ -130,21 +127,16 @@ class report_aeroo_import(osv.osv_memory):
                 info += "Charset: %s\n" % rep_charset
             info += "Parser: %s\n" % (parser_state in ('def','loc') and 'customized' or 'default')
             info += "Stylesheet: %s%s\n" % (styles_select[styles_mode].lower(), style is not None and " (%s)" % style.find("field[@name='name']").text)
-            self.write(cr, uid, ids, {'name':rep_service,'info':info,'state':'info','file':base64.encodestring(data)}, context=context)
+            this.write({'name':rep_service,'info':info,'state':'info','file':base64.encodestring(data)})
         else:
-            raise osv.except_osv(_('Error!'), _('Is not Aeroo report file.'))
+            raise exceptions.UserError(_('Is not Aeroo report file.'))
 
-        mod_obj = self.pool.get('ir.model.data')
-        act_obj = self.pool.get('ir.actions.act_window')
+        mod_obj = self.env.get('ir.model.data')
+        act_obj = self.env.get('ir.actions.act_window')
 
-        mod_id = mod_obj.search(cr, uid, [('name', '=', 'action_aeroo_report_import_wizard')])[0]
-        res_id = mod_obj.read(cr, uid, mod_id, ['res_id'])['res_id']
-        act_win = act_obj.read(cr, uid, res_id, [])
-        act_win['domain'] = [('id','in',ids)]
-        act_win['context'] = {'default_ids':ids}
+        mod = mod_obj.search([('name', '=', 'action_aeroo_report_import_wizard')])[0]
+        res_id = mod_obj.read(mod.id, ['res_id'])['res_id']
+        act_win = act_obj.read(res_id, [])
+        act_win['domain'] = [('id','in',[this.id])]
+        act_win['context'] = {'default_ids':[this.id]}
         return act_win
-        
-    _defaults = {
-        'state': 'draft',
-    }
-

@@ -30,22 +30,18 @@
 #
 ################################################################################
 
-from openerp import registry, models, _
+from odoo import models, _
 from barcode import barcode
-from openerp.tools import translate
+
 #from currency_to_text import currency_to_text
 from ctt_objects import supported_language
 import base64
 import StringIO
 from PIL import Image
 import time
-import openerp.osv as osv
-from openerp.report import report_sxw
-import openerp.netsvc as netsvc
-from openerp.tools.safe_eval import safe_eval as eval
+from odoo.report import report_sxw
+from odoo.tools.safe_eval import safe_eval as eval
 from aeroolib.plugins.opendocument import _filter
-
-from openerp.osv.orm import browse_record_list #TODO v8?
 
 import logging
 logger = logging.getLogger('report_aeroo')
@@ -105,12 +101,8 @@ class ExtraFunctions(object):
     """ This class contains some extra functions which
         can be called from the report's template.
     """
-    def __init__(self, cr, uid, report_id, context):
-        self.cr = cr
-        self.uid = uid
-        self.registry = registry(self.cr.dbname)
-        self.report_id = report_id
-        self.context = context
+    def __init__(self, tr):
+        self.tr = tr
         self.functions = {
             'asarray':self._asarray,
             'asimage':self._asimage,
@@ -133,7 +125,7 @@ class ExtraFunctions(object):
             'count_blank':self._count_blank,
             '_':self._translate_text,
             'gettext':self._translate_text,
-            'currency_to_text':self._currency2text(context['company'].currency_id.name), #self._currency2text(context['company'].currency_id.code),
+            'currency_to_text':self._currency2text(tr.env.context['company'].currency_id.name), #self._currency2text(context['company'].currency_id.code),
             'barcode':barcode.make_barcode,
             'debugit':self.debugit,
             'dec_to_time':self._dec2time,
@@ -146,7 +138,7 @@ class ExtraFunctions(object):
             'bool_as_icon':self._bool_as_icon,
             'time':time,
             'report_xml': self._get_report_xml(),
-            'get_log': self._perm_read(self.cr, self.uid),
+            'get_log': self._perm_read(),
             'get_selection_items': self._get_selection_items(),
             'itemize': self._itemize,
             'html_escape': self._html_escape,
@@ -164,30 +156,30 @@ class ExtraFunctions(object):
         }
 
     def __filter(self, val):
-        if isinstance(val, osv.orm.browse_null):
+        if not val:
             return ''
-        elif isinstance(val, osv.orm.browse_record):
+        elif isinstance(val, models.browse_record):
             return val.with_context(lang=self._get_lang()).name_get()[0][1]
         return _filter(val)
 
-    def _perm_read(self, cr, uid):
-        def get_log(obj, field=None):
+    def _perm_read(self):
+        def get_log(self, field=None):
             if field:
-                return obj.perm_read()[0][field]
+                return self.perm_read()[0][field]
             else:
-                return obj.perm_read()[0]
+                return self.perm_read()[0]
         return get_log
 
     def _get_report_xml(self):
-        return self.registry['ir.actions.report.xml'].browse(self.cr, self.uid, self.report_id)
+        return self.tr.env['ir.actions.report.xml'].browse(self.tr.id)
 
     def _get_lang(self, source='current'):
         if source=='current':
-            return self.context['lang'] or self.context['user_lang']
+            return self.tr.env.context['lang'] or self.tr.env.context['user_lang']
         elif source=='company':
-            return self.context['user'].company_id.partner_id.lang
+            return self.tr.env.context['user'].company_id.partner_id.lang
         elif source=='user':
-            return self.context['user_lang']
+            return self.tr.env.context['user_lang']
 
     def _bool_as_icon(self, val, kind=0):
         if isinstance(kind, (list, tuple)):
@@ -224,18 +216,18 @@ class ExtraFunctions(object):
         return c_to_text
 
     def _translate_text(self, source):
-        trans_obj = self.registry['ir.translation']
-        trans = trans_obj.search(self.cr,self.uid,[('res_id','=',self.report_id),('type','=','report'),('src','=',source),('lang','=',self.context['lang'] or self.context['user_lang'])])
+        trans_obj = self.tr.env['ir.translation']
+        trans = trans_obj.search([('res_id','=',self.tr.id),('type','=','report'),('src','=',source),('lang','=',self.tr.env.context['lang'] or self.tr.env.context['user_lang'])])
         # mod from https://github.com/aeroo/aeroo_reports/pull/57/files
         if trans:
-            return trans_obj._get_source(self.cr, self.uid, 'ir.actions.report.xml', 'report', self._get_lang(), source=source, res_id=self.report_id)
+            return trans_obj._get_source('ir.actions.report.xml', 'report', self._get_lang(), source=source, res_id=self.tr.id)
 
-        trans = trans_obj.search(self.cr,self.uid,[('type','=','report'),('src','=',source),('lang','=',self.context['lang'] or self.context['user_lang'])])
+        trans = trans_obj.search([('type','=','report'),('src','=',source),('lang','=',self.context['lang'] or self.context['user_lang'])])
         if trans:
-            return trans_obj._get_source(self.cr, self.uid, 'ir.actions.report.xml', 'report', self._get_lang(), source=source)
+            return trans_obj._get_source('ir.actions.report.xml', 'report', self._get_lang(), source=source)
 
-        trans_obj.create(self.cr, self.uid, {'src':source,'type':'report','lang':self._get_lang(),'res_id':self.report_id,'name':'ir.actions.report.xml'})
-        return trans_obj._get_source(self.cr, self.uid, 'ir.actions.report.xml', 'report', self._get_lang(), source=source, res_id=self.report_id)
+        trans_obj.create({'src':source,'type':'report','lang':self._get_lang(),'res_id':self.tr.id,'name':'ir.actions.report.xml'})
+        return trans_obj._get_source('ir.actions.report.xml', 'report', self._get_lang(), source=source, res_id=self.tr.id)
         # if not trans:
         #     #trans_obj.create(self.cr, self.uid, {'src':source,'type':'report','lang':self._get_lang(),'res_id':self.report_id,'name':('ir.actions.report.xml,%s' % source)[:128]})
         #     trans_obj.create(self.cr, self.uid, {'src':source,'type':'report','lang':self._get_lang(),'res_id':self.report_id,'name':'ir.actions.report.xml'})
@@ -308,42 +300,42 @@ class ExtraFunctions(object):
         if not obj:
             return ''
         try:
-            if isinstance(obj, browse_record_list):
+            if hasattr(obj, '_ids'):
                 obj = obj[0]
             if isinstance(obj, (str,unicode)):
                 model = obj
             else:
                 model = obj._name
             if isinstance(obj, (str,unicode)) or hasattr(obj, field):
-                labels = self.registry[model].fields_get(self.cr, self.uid, allfields=[field], context=self.context)
+                labels = self.tr.env[model].fields_get([field])
                 return labels[field]['string']
         except Exception, e:
             raise e
 
     def _field_size(self, obj, field):
         try:
-            if isinstance(obj, browse_record_list):
+            if hasattr(obj, '_ids'):
                 obj = obj[0]
             if isinstance(obj, (str,unicode)):
                 model = obj
             else:
                 model = obj._name
             if isinstance(obj, (str,unicode)) or hasattr(obj, field):
-                size = self.registry[model]._columns[field].size
+                size = self.tr.env[model]._columns[field].size
                 return size
         except Exception, e:
             return ''
 
     def _field_accuracy(self, obj, field):
         try:
-            if isinstance(obj, browse_record_list):
+            if hasattr(obj, '_ids'):
                 obj = obj[0]
             if isinstance(obj, (str,unicode)):
                 model = obj
             else:
                 model = obj._name
             if isinstance(obj, (str,unicode)) or hasattr(obj, field):
-                digits = self.registry[model]._columns[field].digits
+                digits = self.tr.env[model]._columns[field].digits
                 return digits or [16,2]
         except Exception:
             return []
@@ -351,7 +343,7 @@ class ExtraFunctions(object):
     def _get_selection_items(self, kind='items'):
         def get_selection_item(obj, field, value=None):
             try:
-                if isinstance(obj, browse_record_list):
+                if hasattr(obj, '_ids'):
                     obj = obj[0]
                 if isinstance(obj, (str,unicode)):
                     model = obj
@@ -361,21 +353,21 @@ class ExtraFunctions(object):
                     field_val = getattr(obj, field)
                 if kind=='item':
                     if field_val:
-                        return dict(self.registry[model].fields_get(self.cr, self.uid, allfields=[field], context=self.context)[field]['selection'])[field_val]
+                        return dict(self.tr.env[model].fields_get([field])[field]['selection'])[field_val]
                 elif kind=='items':
-                    return self.registry[model].fields_get(self.cr, self.uid, allfields=[field], context=self.context)[field]['selection']
+                    return self.tr.env[model].fields_get([field])[field]['selection']
                 return ''
             except Exception:
                 return ''
         return get_selection_item
 
     def _get_attachments(self, o, index=None, raw=False):
-        attach_obj = self.registry['ir.attachment']
+        attach_obj = self.tr.env['ir.attachment']
         srch_param = [('res_model','=',o._name),('res_id','=',o.id)]
         if type(index)==str:
             srch_param.append(('name','=',index))
-        attachments = attach_obj.search(self.cr,self.uid,srch_param)
-        res = [x['datas'] for x in attach_obj.read(self.cr,self.uid,attachments,['datas']) if x['datas']]
+        attachments = attach_obj.search(srch_param)
+        res = [x['datas'] for x in attachments]
         convert = raw and base64.decodestring or (lambda a: a)
         if type(index)==int:
             return convert(res[index])
@@ -479,13 +471,12 @@ class ExtraFunctions(object):
             yield l[i:i+n]
 
     def _search_ids(self, model, domain):
-        obj = self.registry[model]
-        return obj.search(self.cr, self.uid, domain)
+        obj = self.tr.env[model]
+        return obj.search(domain)
 
     def _search(self, model, domain):
-        obj = self.registry[model]
-        ids = obj.search(self.cr, self.uid, domain)
-        return obj.browse(self.cr, self.uid, ids, {'lang':self._get_lang()})
+        obj = self.tr.with_env(lang=self._get_lang()).env[model]
+        return obj.search(domain)
 
     def _browse(self, *args):
         if not args or (args and not args[0]):
@@ -497,7 +488,7 @@ class ExtraFunctions(object):
             model, id = args
         else:
             raise None
-        return self.registry[model].browse(self.cr, self.uid, id)
+        return self.tr.env[model].browse(id)
 
     def _get_safe(self, expression, obj):
         try:

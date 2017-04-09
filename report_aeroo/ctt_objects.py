@@ -45,8 +45,8 @@ class ctt_language(object):
                 """Sum out of bounds: must be from %s to %s""" % \
                 (str(self.minbound), str(self.maxbound)))
 
-    def check_currency(self):
-        if currency not in supported_currency: 
+    def check_currency(self, currency):
+        if currency not in self.supported_currency:
             raise Exception(\
                 """Unsupported or no currency: must be one of (%s)""" % \
                 ', '.join(self.supported_currency))

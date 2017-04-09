@@ -33,6 +33,7 @@
 # Warning: this software is in alpha stage, all interfaces are subject to change
 # without prior notice
 
+import os
 import json
 import requests
 from base64 import b64encode, b64decode

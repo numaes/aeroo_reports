@@ -31,7 +31,6 @@
 
 from openerp import api, models, fields, _
 
-from openerp.report import interface
 from tempfile import NamedTemporaryFile
 import md5
 try:

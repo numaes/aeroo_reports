@@ -30,13 +30,13 @@
 #
 ################################################################################
 
-from openerp import models, fields, api, _
+from odoo import models, fields, api, _
 
-import openerp.tools as tools
+import odoo.tools as tools
 import os, base64
 import urllib2
 from docs_client_lib import DOCSConnection
-from openerp.addons.report_aeroo.report_aeroo import aeroo_lock
+from odoo.addons.report_aeroo.report_aeroo import aeroo_lock
 
 try:
     from cStringIO import StringIO
@@ -142,20 +142,15 @@ class docs_config_installer(models.TransientModel):
     
     @api.model
     def default_get(self, allfields):
-        icp = self.pool['ir.config_parameter']
+        icp = self.env['ir.config_parameter']
         defaults = super(docs_config_installer, self).default_get(allfields)
-        enabled = icp.get_param(self.env.cr, self.env.uid, 'aeroo.docs_enabled')
+        enabled = icp.get_param('aeroo.docs_enabled')
         defaults['enabled'] = enabled == 'True' and True or False
-        defaults['host'] = icp.get_param(self.env.cr, self.env.uid, 
-                            'aeroo.docs_host') or 'localhost'
-        defaults['port'] = int(icp.get_param(self.env.cr, self.env.uid, 
-                            'aeroo.docs_port')) or 8989
-        defaults['auth_type'] = icp.get_param(self.env.cr, self.env.uid, 
-                            'aeroo.docs_auth_type') or False
-        defaults['username'] = icp.get_param(self.env.cr, self.env.uid, 
-                            'aeroo.docs_username') or 'anonymous'
-        defaults['password'] = icp.get_param(self.env.cr, self.env.uid, 
-                            'aeroo.docs_password') or 'anonymous'
+        defaults['host'] = icp.get_param('aeroo.docs_host') or 'localhost'
+        defaults['port'] = int(icp.get_param('aeroo.docs_port')) or 8989
+        defaults['auth_type'] = icp.get_param('aeroo.docs_auth_type') or False
+        defaults['username'] = icp.get_param('aeroo.docs_username') or 'anonymous'
+        defaults['password'] = icp.get_param('aeroo.docs_password') or 'anonymous'
         return defaults
     
     @api.multi
